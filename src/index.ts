@@ -1,3 +1,3 @@
-import {ARApp} from "./components/ARApp";
+import {XRApp} from "./components/XRApp";
 
-let arApp = new ARApp();
+let arApp = new XRApp();

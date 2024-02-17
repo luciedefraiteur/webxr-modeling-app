@@ -8,7 +8,7 @@ import {XRControllerModelFactory} from "three/examples/jsm/webxr/XRControllerMod
 import {XRHandModelFactory} from "three/examples/jsm/webxr/XRHandModelFactory";
 import * as THREEMeshUI from "three-mesh-ui";
 
-export class ARAppXRSession
+export class XRAppXRSession
 {
     hand1: THREE.XRHandSpace;
     hand2: THREE.XRHandSpace;
@@ -235,11 +235,11 @@ export class ARAppXRSession
             // they called "render" function, certainly to intersect etc...
         });
         this.dragControls.addEventListener('dragstart', function(event) {controls.enabled = false;});
-        this.dragControls.addEventListener('dragend', function(event) {controls.enabled = true; });
+        this.dragControls.addEventListener('dragend', function(event) {controls.enabled = true;});
 
         // spectator cam
 
-        this.enableSpectatorCam = ARAppXRSession.platformIsPowerfulEnoughToRenderPasses();
+        this.enableSpectatorCam = XRAppXRSession.platformIsPowerfulEnoughToRenderPasses();
 
         // offersession testing
         document.querySelector("#sessionofferbtn").addEventListener("click", evt =>
@@ -300,24 +300,269 @@ export class ARAppXRSession
         }
     }
 }
-export class ARApp
+
+/*
+
+// chaque main est indépendante, peut s'updater de manière autonome
+//  et sans connaissance des autres mains,
+// juste des objets qui ont déja une possession par une main.
+
+
+XRController.grabbedItems = { [ 'item-uuuid'] : objectDragData }
+// et pour simplifier en attendant des véritables selections:
+XRControlleR.grabbedItem = {uuid: 'item-uuid' , dragInfo: DragInfo }
+
+
+// situation: je keydown avec tel boutton de tel controlleur
+
+
+
+
+XRApp.update()
+{
+    for (let i = 0; i < users.length; i++)
+    {
+        users[i].update();
+    }
+}
+
+XRUser.update()
+{
+    controllers: XRController | DesktopController
+    for (let i = 0; i < controllers.length; i++)
+    {
+        controllers[i].update();
+    }
+}
+
+XRController.threeController: XRTargetRaySpace
+XRController.constructor()
+{
+    add event for that that that...
+}
+
+XRController.hoveredItem = undefined;
+
+XRController.update()
+{
+const old = this.hoveredItem;
+  this.hoveredItem = ui raycast...
+  if (this.hoveredItem !== old && checkPossession(old))
+  {
+    old.clearVisuals();
+  }
+  this.hoveredItem.hoverVisuals();
+}
+
+
+XRController.clickCandidate = {uuid: string, mouseDownTime: number }
+
+XRController.mouseDown()
+{
+    mouseDown = ui raycast...
+    mouseDown.mouseDown(this);
+    this.clickCandidate = {mouseDown, time}
+}
+
+XRController.mouseUp()
+{
+    if (this.clickCandidate)
+    {
+        if (time - this.clickCandidate.time < MOUSE_CLICK_MAX_DURATION)
+        {
+            this.clickCandidate.mouseDown.click();
+        }
+        else
+        {
+            const obj = this.clickCandiate.mouseDown;
+            obj.grabbedVisual(this);
+            this.grab(obj);
+        }
+        this.clickCandidate = undefined;
+
+    }
+}
+
+    XRUser ? (un par personne utilisant la xr)
+
+    XRSelector ? (genre yen a un par controller et un pour la souris? et ça gère une selection etc propre au controlleur en question? )
+
+    XRSelectable ? (quel paradigme pour vérouiller un objet entre plusieurs selector?)
+
+    // Paradigme peut et doit permettre réseau, (+ de controlleurs en tout genre)
+
+
+    XRUI: possède tout les réf XRUIItem en tant que items[];
+
+    XRUI peut gérer seul son raycast, mais c'est tout:
+
+    `let hoveredButton = (XRUI.raycast());`
+
+    XRControl:
+
+    XRControl.mode === XRControlMode.Mouse | XRControlMode.XR
+
+    XRCOntrol.update()
+    {
+        if (mouseDown)
+        {
+            switch (this.mode)
+            {
+                case (XRControlMode.XR):
+                {
+                    let hoveredUI = XRUI.raycast();
+                    
+                    hoveredUI.onHover();
+                    break;
+                }
+            }
+
+        }
+    }
+    
+
+    on cast sur tout les items sans récursivitée? 
+    l'important est que l'on trouve l'objet le plus proche.
+
+    ou on cast sur tout les grand parents?
+
+    rep: c'est pas important pour le moment sur tout les items.
+
+    les XRUIItem ont des comportements différents au hover etc...    
+    XRUIDragBar // va se débrouiller pour qu'on le drag avec tout ses enfants.
+    XRUIButton // va se débrouiller pour etre clickable.
+    XRUIPannel // contient juste des boutons.
+    XRUIContainer // dragbar + panel + corner.
+    XRUICorner // permet de resize un container.
+    
+
+    pour l'instant ça se réduit à ça, mais dans le futur éventuellement des choses plus compliquées, menu vertical/horizontal etc...
+    en copiant un peu sur l'ui d'unity.
+
+*/
+
+export abstract class XRUIItem extends THREE.Group
+{
+    protected onHover?(): void; // will i start to drag, or whatever action on hovered.
+    protected onClick?(): void; // will i start to drag, or whatever action on clicked.
+    protected onMouseDown?(): void; // etc...
+    protected onMouseUp?(): void;
+}
+
+export class TestClass extends XRUIItem
+{
+
+}
+
+export class XRUI
+{
+    mode: "xr" | "mouse";
+
+    items: XRUIItem[] = [];
+
+}
+
+/*
+    ui got a mode, between 3
+
+*/
+
+export interface XRCommandPanelOptions
+{
+    commands?: {[index: string]: (self?: XRCommandPanel, buttonName?: string) => {}},
+    buttonHeight?: number,
+    buttonWidth?: number,
+}
+/*
+
+    XRUIInteraction -> main ui interaction system.
+
+        register(ui: XRUI) register an ui panel or button?
+        {
+
+        }
+
+    XRUIPanel -> main panel class, it helps us to have the little draggable window etc like in oculus.
+
+    Grab logic?
+        XRUIPanel.update(); -> update check for raycast with any ui 
+
+
+
+*/
+
+export class XRCommandPanel extends THREE.Object3D
+{
+    createButtonPanel(index: number)
+    {
+
+    }
+    private static _defaultOptions: Required<XRCommandPanelOptions> | undefined;
+    private static get defaultOptions(): Required<XRCommandPanelOptions>
+    {
+        if(this._defaultOptions == undefined)
+        {
+            this._defaultOptions = {
+                buttonHeight: 0.5,
+                buttonWidth: 1.0,
+                commands: undefined
+            };
+        }
+        return (this.defaultOptions);
+    }
+
+    constructor(options?: XRCommandPanelOptions)
+    {
+        super();
+        const dflt = XRCommandPanel.defaultOptions;
+        let reqOptions: Required<XRCommandPanelOptions>;
+        if(options == undefined)
+        {
+            reqOptions = {...dflt};
+        }
+        else
+        {
+            reqOptions = Object.assign(options, dflt);
+        }
+        const commands = reqOptions.commands;
+        if(commands !== undefined)
+        {
+            for(const key in commands)
+            {
+                let cmdAction = commands[key];
+
+            }
+        }
+    }
+    // check for raycast.
+    update(deltaTime: number)
+    {
+
+    }
+    click()
+    {
+
+    }
+}
+export class XRApp
 {
     private scene: THREE.Scene = new THREE.Scene();
     private camera: THREE.PerspectiveCamera;
     private controls: OrbitControls;
     private renderer: THREE.WebGLRenderer;
-    private arAppXRSession: ARAppXRSession;
+    private XrAppXRSession: XRAppXRSession;
 
     public render()
     {
         this.renderer.render(this.scene, this.camera);
-        this.arAppXRSession.renderSpectator();
+        this.XrAppXRSession.renderSpectator();
         THREEMeshUI.update();
     }
 
     private initLoop = (() => 
     {
-        this.renderer.setAnimationLoop(()  => {
+        this.renderer.setAnimationLoop(() =>
+        {
             this.render();
         });
     });
@@ -342,7 +587,7 @@ export class ARApp
         this.controls.target.set(0, 1.6, 0);
         this.controls.update();
 
-        this.arAppXRSession = new ARAppXRSession(this.renderer, this.scene, this.camera, this.controls);
+        this.XrAppXRSession = new XRAppXRSession(this.renderer, this.scene, this.camera, this.controls);
 
 
 
@@ -351,7 +596,7 @@ export class ARApp
 
         const light = new THREE.DirectionalLight(0xffffff);
         light.position.set(0, 6, 0);
-        light.castShadow = ARAppXRSession.platformIsPowerfulEnoughToRenderPasses();
+        light.castShadow = XRAppXRSession.platformIsPowerfulEnoughToRenderPasses();
         light.shadow.camera.top = 2;
         light.shadow.camera.bottom = - 2;
         light.shadow.camera.right = 2;
@@ -380,13 +625,13 @@ export class ARApp
             fontFamily: "/assets/Roboto-msdf.json",
             fontTexture: "/assets/Roboto-msdf.png"
         });
-    
+
         panel.position.set(0, 1, -1.8);
         panel.rotation.x = -0.55;
         this.scene.add(panel);
-    
+
         //
-    
+
         panel.add(
             new THREEMeshUI.Text({
                 content: "three-mesh-ui npm package",
@@ -432,12 +677,12 @@ export class ARApp
         this.initLoop();
         const onWindowResize = () =>
         {
-        
+
             this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
-        
+
             this.renderer.setSize(window.innerWidth, window.innerHeight);
-        
+
         };
         window.addEventListener('resize', onWindowResize);
     }
