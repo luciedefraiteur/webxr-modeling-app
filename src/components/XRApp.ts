@@ -7,7 +7,7 @@ import {ARButton} from "three/examples/jsm/webxr/ARButton";
 import {XRControllerModelFactory} from "three/examples/jsm/webxr/XRControllerModelFactory";
 import {XRHandModelFactory} from "three/examples/jsm/webxr/XRHandModelFactory";
 import * as THREEMeshUI from "three-mesh-ui";
-
+import { UniqueIDHelper } from "../utils/UniqueIDHelper";
 export class XRAppXRSession
 {
     hand1: THREE.XRHandSpace;
@@ -301,6 +301,174 @@ export class XRAppXRSession
     }
 }
 
+
+
+export class DesktopController
+{
+    grabbedItem: XRUIItem;
+    update()
+    {
+
+    }
+}
+
+export class XRUser
+{
+    controllers: (XRController | DesktopController)[] = [];
+    mode: "XR" | "desktop" = "XR";
+    constructor(public readonly xrApp: XRApp)
+    {
+        this.controllers.push(new XRController(xrApp, 0));
+        this.controllers.push(new XRController(xrApp, 1));
+    }
+    update()
+    {
+        for(let i = 0; i < this.controllers.length; i++)
+        {
+            this.controllers[i].update();
+        }
+    }
+}
+
+
+export class XRUI
+{
+    mode: "xr" | "mouse";
+
+    items: XRUIItem[] = [];
+    raycast = (() =>
+    {
+        const rc = new THREE.Raycaster();
+        return ((origin: THREE.Vector3, direction: THREE.Vector3) =>
+        {
+            rc.set(origin, direction);
+            const intersects = rc.intersectObjects(this.items, false);
+            return (intersects.map((a) =>
+            {
+                return ({intersect: a, uiItem: a.object as XRUIItem});
+            }));
+
+        });
+    })();
+
+}
+
+export abstract class XRUIItem extends THREE.Group
+{
+    //!! we could ask consent for possession, so the object could ignore a specific controller.
+    /**
+     * Don't edit this list, it is the ordered list of controllers that are owning us. 
+     */
+    possessed: XRController[] = [];
+    public onHover?(controller: XRController, intersection: THREE.Intersection<THREE.Object3D<THREE.Event>>): void;
+    public onPointerEnter?(controller: XRController, intersection: THREE.Intersection<THREE.Object3D<THREE.Event>>): void;
+    public onPointerLeave?(controller: XRController, intersection: THREE.Intersection<THREE.Object3D<THREE.Event>>): void;
+    public onClick?(): void; // will i start to drag, or whatever action on clicked.
+    public onPointerDown?(): void; // etc...
+    public onPointerUp?(): void;
+}
+
+export class XRController
+{
+    mode: "dragging" | "none";
+    grabbedItem: XRUIItem;
+    hoveredItems: XRUIItem[];
+
+    targetRaySpace: THREE.XRTargetRaySpace;
+    handSpace: THREE.XRHandSpace;
+    gripSpace: THREE.XRGripSpace;
+    constructor(public readonly xrApp: XRApp, controllerIndex: number)
+    {
+        // controllers
+        const controller1 = xrApp.renderer.xr.getController(controllerIndex);
+        this.targetRaySpace = controller1;
+
+        controller1.addEventListener('selectstart', (evt) =>
+        {
+            console.log("START 1", evt);
+            //onSelectStart(evt);
+        });
+        controller1.addEventListener('selectend', evt =>
+        {
+            console.log("END 1", evt);
+            //onSelectEnd(evt);
+        });
+
+        xrApp.scene.add(controller1);
+
+        const controllerModelFactory = new XRControllerModelFactory();
+
+        const controllerGrip1 = xrApp.renderer.xr.getControllerGrip(controllerIndex);
+        this.gripSpace = controllerGrip1;
+        controllerGrip1.add(controllerModelFactory.createControllerModel(controllerGrip1));
+        xrApp.scene.add(controllerGrip1);
+        const handModelFactory = new XRHandModelFactory();
+
+        // change this line to a specific path to test custom hand models:
+        // handModelFactory.setPath("https://cdn.glitch.global/53fee240-c36e-4d43-9f91-54314d6b48cf/");
+
+        const hand1 = xrApp.renderer.xr.getHand(controllerIndex);
+        this.handSpace = hand1;
+
+        hand1.add(handModelFactory.createHandModel(hand1, "mesh"));
+
+        xrApp.scene.add(hand1);
+
+        const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, - 1)]);
+
+        const line = new THREE.Line(geometry);
+        line.name = 'line';
+        line.scale.z = 5;
+
+        controller1.add(line.clone());
+
+    }
+    
+    update()
+    {
+        const olds = this.hoveredItems;
+        const tempMatrix: THREE.Matrix4 = new THREE.Matrix4();
+        tempMatrix.identity().extractRotation(this.targetRaySpace.matrixWorld);
+
+        const origin = new THREE.Vector3().setFromMatrixPosition(this.targetRaySpace.matrixWorld);
+        const direction = new THREE.Vector3().set(0, 0, - 1).applyMatrix4(tempMatrix);
+
+        const newHovereds = this.xrApp.ui.raycast(origin, direction);; //  XRUI.raycast ui raycast...
+        const firstIntersect = (0 == newHovereds.length) ? undefined : newHovereds[0];
+        const isHovered: {[index: string] : boolean} = {};
+        newHovereds.forEach((newHovered) => {
+            isHovered[UniqueIDHelper.GetUUID(newHovered)] = true;
+        });
+        const alreadyHovered: {[index: string] : boolean} = {};
+        olds.forEach(old => {
+            if (!(isHovered[UniqueIDHelper.GetUUID(old)]))
+            {
+                
+                const index = old.possessed.indexOf(this);
+                if (index < 0)
+                {
+                    throw new Error("[XRController] : possessed object not found.");
+                }
+                old.possessed.splice(index, 1);
+                old.onPointerLeave(this, (firstIntersect !== undefined) ? firstIntersect.intersect : undefined);
+            }
+            else
+            {
+                alreadyHovered[UniqueIDHelper.GetUUID(old)] = true;
+            }
+        });
+        newHovereds.forEach((newHovered) => {
+            if (!(alreadyHovered[UniqueIDHelper.GetUUID(newHovered)]))
+            {
+                newHovered.uiItem.possessed.push(this);
+                newHovered.uiItem.onPointerEnter(this, newHovered.intersect);
+            }
+            newHovered.uiItem.onHover(this, newHovered.intersect);
+        });
+    }
+
+}
+
 /*
 
 // chaque main est indépendante, peut s'updater de manière autonome
@@ -419,7 +587,6 @@ XRController.mouseUp()
 
         }
     }
-    
 
     on cast sur tout les items sans récursivitée? 
     l'important est que l'on trouve l'objet le plus proche.
@@ -441,26 +608,9 @@ XRController.mouseUp()
 
 */
 
-export abstract class XRUIItem extends THREE.Group
-{
-    protected onHover?(): void; // will i start to drag, or whatever action on hovered.
-    protected onClick?(): void; // will i start to drag, or whatever action on clicked.
-    protected onMouseDown?(): void; // etc...
-    protected onMouseUp?(): void;
-}
 
-export class TestClass extends XRUIItem
-{
 
-}
 
-export class XRUI
-{
-    mode: "xr" | "mouse";
-
-    items: XRUIItem[] = [];
-
-}
 
 /*
     ui got a mode, between 3
@@ -546,16 +696,16 @@ export class XRCommandPanel extends THREE.Object3D
 }
 export class XRApp
 {
-    private scene: THREE.Scene = new THREE.Scene();
-    private camera: THREE.PerspectiveCamera;
-    private controls: OrbitControls;
-    private renderer: THREE.WebGLRenderer;
-    private XrAppXRSession: XRAppXRSession;
-
+    public readonly scene: THREE.Scene = new THREE.Scene();
+    public readonly camera: THREE.PerspectiveCamera;
+    public readonly controls: OrbitControls;
+    public readonly renderer: THREE.WebGLRenderer;
+    public readonly xrAppXrSession: XRAppXRSession;
+    public readonly ui: XRUI;
     public render()
     {
         this.renderer.render(this.scene, this.camera);
-        this.XrAppXRSession.renderSpectator();
+        this.xrAppXrSession.renderSpectator();
         THREEMeshUI.update();
     }
 
@@ -587,7 +737,7 @@ export class XRApp
         this.controls.target.set(0, 1.6, 0);
         this.controls.update();
 
-        this.XrAppXRSession = new XRAppXRSession(this.renderer, this.scene, this.camera, this.controls);
+        this.xrAppXrSession = new XRAppXRSession(this.renderer, this.scene, this.camera, this.controls);
 
 
 
@@ -685,6 +835,8 @@ export class XRApp
 
         };
         window.addEventListener('resize', onWindowResize);
+
+        this.ui = new XRUI();
     }
 
 }

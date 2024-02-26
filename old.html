@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js vr - dragging</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> vr/ar/screen - dragging
+		</div>
+
+    <script defer src="https://unpkg.com/es-module-shims@0.4.6/dist/es-module-shims.js"></script>
+    <script type="importmap">
+			{
+				"imports": {
+					"three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three-addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+				}
+			}
+    </script>
+    
+		<script type="module">
+
+			import * as THREE from 'three';
+			import { OrbitControls } from 'three-addons/controls/OrbitControls.js';
+			import { VRButton } from 'three-addons/webxr/VRButton.js';
+			import { ARButton } from 'three-addons/webxr/ARButton.js';
+      import { DragControls } from 'three-addons/controls/DragControls.js';
+			import { XRControllerModelFactory } from 'three-addons/webxr/XRControllerModelFactory.js';
+			import { XRHandModelFactory } from 'three-addons/webxr/XRHandModelFactory.js';
+      
+			let container;
+			let camera, scene, renderer;
+      let background, floor;
+			let controller1, controller2;
+			let hand1, hand2;
+			let controllerGrip1, controllerGrip2;
+      let enableSpectatorCam;
+
+			const intersected = [];
+			const tempMatrix = new THREE.Matrix4();
+
+			let controls, dragControls, group;
+
+			const mouse = new THREE.Vector2(), raycaster = new THREE.Raycaster();
+
+			init();
+			animate();
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				scene = new THREE.Scene();
+				background = scene.background = new THREE.Color( 0x808080 );
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 10 );
+				camera.position.set( 0, 1.6, 3 );
+
+				controls = new OrbitControls( camera, container );
+				controls.target.set( 0, 1.6, 0 );
+				controls.update();
+
+				const floorGeometry = new THREE.PlaneGeometry( 4, 4 );
+				const floorMaterial = new THREE.MeshStandardMaterial( {
+					color: 0xeeeeee,
+					roughness: 1.0,
+					metalness: 0.0
+				} );
+				floor = new THREE.Mesh( floorGeometry, floorMaterial );
+				floor.rotation.x = - Math.PI / 2;
+				floor.receiveShadow = true;
+				scene.add( floor );
+
+				scene.add( new THREE.HemisphereLight( 0x808080, 0x606060 ) );
+
+				const light = new THREE.DirectionalLight( 0xffffff );
+				light.position.set( 0, 6, 0 );
+				light.castShadow = platformIsPowerfulEnoughToRenderPasses();
+				light.shadow.camera.top = 2;
+				light.shadow.camera.bottom = - 2;
+				light.shadow.camera.right = 2;
+				light.shadow.camera.left = - 2;
+				light.shadow.mapSize.set( 4096, 4096 );
+				scene.add( light );
+        
+        const objects = [];
+				group = new THREE.Group();
+				scene.add( group );
+
+				const geometries = [
+					new THREE.BoxGeometry( 0.2, 0.2, 0.2 ),
+					new THREE.ConeGeometry( 0.2, 0.2, 64 ),
+					new THREE.CylinderGeometry( 0.2, 0.2, 0.2, 64 ),
+					new THREE.IcosahedronGeometry( 0.2, 8 ),
+					new THREE.TorusGeometry( 0.2, 0.04, 64, 32 )
+				];
+
+				for ( let i = 0; i < 50; i ++ ) {
+
+					const geometry = geometries[ Math.floor( Math.random() * geometries.length ) ];
+					const material = new THREE.MeshStandardMaterial( {
+						color: Math.random() * 0xffffff,
+						roughness: 0.7,
+						metalness: 0.0
+					} );
+
+					const object = new THREE.Mesh( geometry, material );
+
+					object.position.x = Math.random() * 4 - 2;
+					object.position.y = Math.random() * 2;
+					object.position.z = Math.random() * 4 - 2;
+
+					object.rotation.x = Math.random() * 2 * Math.PI;
+					object.rotation.y = Math.random() * 2 * Math.PI;
+					object.rotation.z = Math.random() * 2 * Math.PI;
+
+					object.scale.setScalar( Math.random() + 0.5 );
+
+					object.castShadow = true;
+					object.receiveShadow = true;
+
+					group.add( object );
+          objects.push( object );
+				}
+
+				//
+
+				renderer = new THREE.WebGLRenderer( { antialias: true, alpha: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.outputEncoding = THREE.sRGBEncoding;
+				renderer.shadowMap.enabled = true;
+				renderer.xr.enabled = true;
+				container.appendChild( renderer.domElement );
+
+        
+        const vrButton = VRButton.createButton( renderer );
+				document.body.appendChild( vrButton );
+        vrButton.style.marginLeft = '-80px';
+        // local-floor doesn't work right now, three ARButton overrides it
+        // hand-tracking is required to have hands on Hololens in AR mode
+        const arButton = ARButton.createButton( renderer, {
+          optionalFeatures: ['hand-tracking', 'local-floor', 'dom-overlay']
+        } );
+				document.body.appendChild( arButton );
+        arButton.style.marginLeft = '80px';
+
+        // xr events to show / hide the floor and background in AR
+        
+        renderer.xr.addEventListener( 'sessionstart', function ( event ) {
+          
+          const session = renderer.xr.getSession();
+          console.log( 'sessionstart', session );
+          
+          // see https://developer.mozilla.org/en-US/docs/Web/API/XRSession/environmentBlendMode
+          if( ('environmentBlendMode' in session) && ( session.environmentBlendMode === 'additive' || session.environmentBlendMode === 'alpha-blend' )) {
+
+            scene.background = null;
+            floor.visible = false;
+
+          }
+          
+          // debugging
+          session.addEventListener( 'select', onSessionEvent );
+          session.addEventListener( 'selectstart', onSessionEvent );
+          session.addEventListener( 'selectend', onSessionEvent );
+          session.addEventListener( 'squeeze', onSessionEvent );
+          session.addEventListener( 'squeezestart', onSessionEvent );
+          session.addEventListener( 'squeezeend', onSessionEvent );
+          session.addEventListener( 'inputsourceschange', onInputSourcesChange );
+          
+        } );
+
+        renderer.xr.addEventListener( 'sessionend', function ( event ) {
+          
+          console.log( 'sessionend' );
+          scene.background = background;
+          floor.visible = true;
+          
+        } );
+        
+				// controllers
+        
+				controller1 = renderer.xr.getController( 0 );
+				controller1.addEventListener( 'selectstart', (evt) => {
+          console.log("START 1", evt);
+          onSelectStart(evt);
+        } );
+				controller1.addEventListener( 'selectend', evt => {
+          console.log("END 1", evt);
+          onSelectEnd(evt);
+        });
+				scene.add( controller1 );
+
+				controller2 = renderer.xr.getController( 1 );
+				controller2.addEventListener( 'selectstart', (evt) => {
+          console.log("START 2", evt);
+          onSelectStart(evt);
+        } );
+				controller2.addEventListener( 'selectend', evt => {
+				  console.log("END 2", evt);
+          onSelectEnd(evt);
+        });
+				scene.add( controller2 );
+        
+				const controllerModelFactory = new XRControllerModelFactory();
+
+				controllerGrip1 = renderer.xr.getControllerGrip( 0 );
+				controllerGrip1.add( controllerModelFactory.createControllerModel( controllerGrip1 ) );
+				scene.add( controllerGrip1 );
+
+				controllerGrip2 = renderer.xr.getControllerGrip( 1 );
+				controllerGrip2.add( controllerModelFactory.createControllerModel( controllerGrip2 ) );
+				scene.add( controllerGrip2 );
+        
+				const handModelFactory = new XRHandModelFactory();
+        
+        // change this line to a specific path to test custom hand models:
+        // handModelFactory.setPath("https://cdn.glitch.global/53fee240-c36e-4d43-9f91-54314d6b48cf/");
+        
+				hand1 = renderer.xr.getHand( 0 );
+				hand1.add( handModelFactory.createHandModel( hand1, "mesh" ) );
+
+				scene.add( hand1 );
+        
+				hand2 = renderer.xr.getHand( 1 );
+				hand2.add( handModelFactory.createHandModel( hand2, "mesh" ) );
+
+				scene.add( hand2 );
+      
+				//
+
+				const geometry = new THREE.BufferGeometry().setFromPoints( [ new THREE.Vector3( 0, 0, 0 ), new THREE.Vector3( 0, 0, - 1 ) ] );
+
+				const line = new THREE.Line( geometry );
+				line.name = 'line';
+				line.scale.z = 5;
+
+				controller1.add( line.clone() );
+				controller2.add( line.clone() );
+        
+				//
+
+				window.addEventListener( 'resize', onWindowResize );
+        
+        // dragging on screen
+        
+        dragControls = new DragControls( [ ... objects ], camera, renderer.domElement );
+				dragControls.addEventListener( 'drag', render );
+        dragControls.addEventListener( 'dragstart', function ( event ) { controls.enabled = false; startPossibleClick(); });
+        dragControls.addEventListener( 'dragend', function ( event ) { controls.enabled = true; endPossibleClick(); });
+
+        // spectator cam
+        
+        enableSpectatorCam = platformIsPowerfulEnoughToRenderPasses();
+        
+        // offersession testing
+        document.querySelector("#sessionofferbtn").addEventListener("click", evt => {
+          offerSession();
+        });
+        
+        document.querySelector("#session-freeze").addEventListener("click", evt => {
+          // freeze for 500ms
+          setInterval(() => {
+            const time = Date.now();
+            const targetTime = time + 500;
+            while (Date.now() < targetTime) {}
+          }, 3000);
+        });
+        
+        // sessiongranted testing
+        navigator.xr.addEventListener( 'sessiongranted', () => {
+          console.log("session has been granted");
+          navigator.xr
+            .requestSession( 'immersive-ar', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers'] } )
+            .then(async (session) => {
+                console.log("sessiongranted session has been started");
+                await renderer.xr.setSession(session);
+                console.log("have set session");
+            });
+        });
+        
+        // escape to exit VR
+        window.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                renderer.xr.getSession()?.end();
+            }
+        });
+			}
+      
+      function offerSession() {
+          if ( navigator.xr.offerSession === undefined ) return;
+
+          console.log("offering new session now");
+          navigator.xr
+            .offerSession( 'immersive-ar', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers'] })
+            .then((session) => {
+                console.log("offered session has been accepted", session);
+                renderer.xr.setSession(session);
+            });
+      }
+      
+      function onSessionEvent(event) {
+          console.log("session event", event);
+      }
+      
+      function onInputSourcesChange( event ) {
+         console.log("input sources change", event); 
+      }
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function onSelectStart( event, delayedTarget ) {
+        
+        // WORKAROUND for threejs and/or WebXR issue: sometimes the controller pose on AR is delayed by a frame or two
+        // see https://github.com/mrdoob/three.js/issues/23186
+        
+        if(!delayedTarget) {
+          const trgt = event.target;
+          setTimeout(function() {
+            onSelectStart(event, trgt);
+          }, 50);
+          return;
+        }
+
+				const controller = delayedTarget || event.target;
+        console.log("select start", event, controller, delayedTarget);
+
+				const intersections = getIntersections( controller );
+				if ( intersections.length > 0 ) {
+
+					const intersection = intersections[ 0 ];
+
+					const object = intersection.object;
+					object.material.emissive.b = 1;
+					controller.attach( object );
+          console.log("attaching", object);
+
+					controller.userData.selected = object;
+          
+          startPossibleClick();
+				}
+
+			}
+
+			function onSelectEnd( event ) {
+
+				const controller = event.target;
+        if(!controller) return;
+        console.log("select end", event, controller);
+
+				if ( controller.userData.selected !== undefined ) {
+
+					const object = controller.userData.selected;
+					object.material.emissive.b = 0;
+					group.attach( object );
+          console.log("detaching", object);
+
+					controller.userData.selected = undefined;
+          
+          endPossibleClick();
+				}
+        
+			}
+      
+			function getIntersections( controller ) {
+      
+				tempMatrix.identity().extractRotation( controller.matrixWorld );
+
+				raycaster.ray.origin.setFromMatrixPosition( controller.matrixWorld );
+				raycaster.ray.direction.set( 0, 0, - 1 ).applyMatrix4( tempMatrix );
+
+				return raycaster.intersectObjects( group.children, false );
+
+			}
+
+			function intersectObjects( controller ) {
+
+        if(!controller) return;
+				// Do not highlight when already selected
+
+				if ( controller.userData.selected !== undefined ) return;
+
+				const line = controller.getObjectByName( 'line' );
+				const intersections = getIntersections( controller );
+
+				if ( intersections.length > 0 ) {
+
+					const intersection = intersections[ 0 ];
+
+					const object = intersection.object;
+					object.material.emissive.r = 1;
+					intersected.push( object );
+
+					line.scale.z = intersection.distance;
+
+				} else {
+
+					line.scale.z = 5;
+
+				}
+
+			}
+
+			function cleanIntersected() {
+
+				while ( intersected.length ) {
+
+					const object = intersected.pop();
+					object.material.emissive.r = 0;
+
+				}
+
+			}
+
+			//
+
+			function animate() {
+
+				renderer.setAnimationLoop( render );
+
+			}
+
+			function render() {
+
+				cleanIntersected();
+
+				intersectObjects( controller1 );
+				intersectObjects( controller2 );
+
+				renderer.render( scene, camera );
+
+        // render spectator view if we're in VR on desktop
+        
+        if(enableSpectatorCam && renderer.xr.isPresenting) {
+          
+          const wasXr = renderer.xr.enabled;
+          const previousRenderTarget = renderer.getRenderTarget();
+          
+          renderer.xr.enabled = false;
+          renderer.setRenderTarget(null);
+          
+          renderer.render( scene, camera );
+          
+          renderer.xr.enabled = wasXr;
+          renderer.setRenderTarget(previousRenderTarget);
+          
+        }
+        
+			}
+      
+      // for spectator cam
+      
+      function platformIsPowerfulEnoughToRenderPasses() {
+        
+        const ua = window.navigator.userAgent;
+        const standalone = /Windows|MacOS/.test(ua);
+        const isHololens = /Windows NT/.test(ua) && /Edg/.test(ua) && !/Win64/.test(ua);
+        return standalone && !isHololens;
+        
+      }
+
+      // for sessiongranted testing - navigating between XR pages
+      
+      let clickStartTime;
+      
+      function startPossibleClick() {
+        
+        clickStartTime = new Date().getTime();
+        
+      }
+      
+      function endPossibleClick() {
+        
+        const timeDifference = new Date().getTime() - clickStartTime;
+        
+        if( timeDifference < 200 ) {
+          
+          clickAction();
+          
+        }
+        
+      }
+      
+      function clickAction() {
+        
+        console.log("clicked!");
+        
+        // for sessiongranted VR testing
+        
+        setTimeout(() => {
+          window.location.href = "";
+        }, 3000);
+      }
+
+		</script>
+    <script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+<script>
+  // VConsole will be exported to `window.VConsole` by default.
+  var vConsole = new window.VConsole();
+</script>
+    
+    <div style="z-index: 1000; position: absolute; left: 20px; top: 20px; font-size: 2em;">
+      <button id="sessionofferbtn">
+        Offer Session
+      </button>
+      <button id="session-freeze">
+        Freeze 500ms every 3s
+      </button>
+    </div>
+	</body>
+</html>
